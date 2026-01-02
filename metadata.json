@@ -1,0 +1,5 @@
+{
+  "name": "WanderPlan AI",
+  "description": "An intelligent city trip planner that generates personalized one-day itineraries using Gemini 3 Flash.",
+  "requestFramePermissions": []
+}
