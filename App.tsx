@@ -1,9 +1,10 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import Layout from './components/Layout';
 import TripForm from './components/TripForm';
-import ItineraryTimeline from './components/ItineraryTimeline';
+import MapItinerary from './components/MapItinerary';
 import { generateItinerary } from './services/geminiService';
-import { Preference, ItineraryDay } from './types';
+import { Preference, ItineraryDay, Pace, Budget, Companion } from './types';
 import { AlertCircle, Key } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -32,14 +33,20 @@ const App: React.FC = () => {
   const handleSelectKey = async () => {
     const win = window as any;
     if (win.aistudio && win.aistudio.openSelectKey) {
+      // Fix: Call openSelectKey and then immediately assume success to mitigate race conditions as per guidelines.
       await win.aistudio.openSelectKey();
-      // Assume success after dialog closes or strictly rely on re-checking
-      const hasKey = await win.aistudio.hasSelectedApiKey();
-      setApiKeySelected(hasKey);
+      setApiKeySelected(true);
     }
   };
 
-  const handlePlanTrip = useCallback(async (city: string, preferences: Preference[], numDays: number) => {
+  const handlePlanTrip = useCallback(async (
+    city: string, 
+    preferences: Preference[], 
+    numDays: number,
+    pace: Pace,
+    budget: Budget,
+    companions: Companion
+  ) => {
     // Double check key before starting heavy operations
     const win = window as any;
     if (win.aistudio && win.aistudio.hasSelectedApiKey) {
@@ -56,10 +63,11 @@ const App: React.FC = () => {
     setCurrentCity(city);
 
     try {
-      const data = await generateItinerary(city, preferences, numDays);
+      const data = await generateItinerary(city, preferences, numDays, pace, budget, companions);
       setDays(data);
     } catch (err: any) {
       console.error(err);
+      // Fix: Handle specific 404 error by resetting API key state and prompting user again.
       if (err.message && err.message.includes("Requested entity was not found")) {
          setError("API Key Error: Please select a valid paid API key project.");
          setApiKeySelected(false);
@@ -130,7 +138,7 @@ const App: React.FC = () => {
       {!days ? (
         <TripForm onPlanTrip={handlePlanTrip} isLoading={loading} />
       ) : (
-        <ItineraryTimeline city={currentCity} days={days} onReset={handleReset} />
+        <MapItinerary city={currentCity} days={days} onReset={handleReset} />
       )}
     </Layout>
   );

@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { ItineraryDay, Preference } from "../types";
+import { ItineraryDay, Preference, Pace, Budget, Companion } from "../types";
 import { GEMINI_MODEL } from "../constants";
 
 const itinerarySchema: Schema = {
@@ -16,15 +16,22 @@ const itinerarySchema: Schema = {
           properties: {
             placeName: { type: Type.STRING },
             description: { type: Type.STRING },
-            category: { type: Type.STRING, enum: ["Sightseeing", "Food", "Adventure", "Relax"] },
+            category: { type: Type.STRING, enum: ["Sightseeing", "Food", "Adventure", "Relax", "Nature", "Culture"] },
             rating: { type: Type.NUMBER },
             latitude: { type: Type.NUMBER },
             longitude: { type: Type.NUMBER },
             bestTime: { type: Type.STRING, enum: ["Morning", "Afternoon", "Evening"] },
             imageKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
             durationMinutes: { type: Type.NUMBER },
+            crowdLevel: { type: Type.STRING, enum: ["Low", "Medium", "High"] },
+            distanceFromPrev: { type: Type.STRING, description: "Distance from previous location (e.g. '1.2 km' or '0 km' for start)" },
+            travelTimeMinutes: { type: Type.NUMBER, description: "Estimated travel time from previous location in minutes. 0 for the first location." },
+            nearbyFood: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Max 2 food suggestions nearby" },
+            whyItFits: { type: Type.STRING, description: "1 line on why this fits the user's selected vibe" },
+            pin_number: { type: Type.NUMBER, description: "Sequential number of the stop (1, 2, 3...)" },
+            hover_card_priority: { type: Type.STRING, enum: ["high", "normal"] }
           },
-          required: ["placeName", "description", "category", "rating", "latitude", "longitude", "bestTime", "imageKeywords", "durationMinutes"],
+          required: ["placeName", "description", "category", "rating", "latitude", "longitude", "bestTime", "imageKeywords", "durationMinutes", "crowdLevel", "whyItFits", "pin_number", "travelTimeMinutes"],
         },
       },
     },
@@ -32,11 +39,10 @@ const itinerarySchema: Schema = {
   },
 };
 
-// Queue implementation to rate limit API calls
 class RateLimitedQueue {
   private queue: (() => Promise<void>)[] = [];
   private processing = false;
-  private delayMs = 600; // 0.6s delay ~ 100 requests per minute. Flash model has higher limits.
+  private delayMs = 1200; // Increased delay to ensure search grounding stability
 
   async add<T>(task: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -72,32 +78,31 @@ class RateLimitedQueue {
 
 const imageQueue = new RateLimitedQueue();
 
-export const generateItinerary = async (city: string, preferences: Preference[], days: number): Promise<ItineraryDay[]> => {
-  // Initialize the AI client inside the function to ensure we use the latest API key
+const formatTime = (minutes: number): string => {
+  const h = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const displayH = h % 12 || 12;
+  const displayM = m < 10 ? `0${m}` : m;
+  return `${displayH}:${displayM} ${ampm}`;
+};
+
+export const generateItinerary = async (
+  city: string, 
+  preferences: Preference[], 
+  days: number,
+  pace: Pace,
+  budget: Budget,
+  companions: Companion
+): Promise<ItineraryDay[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const preferencesString = preferences.join(", ");
-  
+  const preferencesString = preferences.length > 0 ? preferences.join(", ") : "Balanced mix of sightseeing and culture";
+  const duration = `${days} Day${days > 1 ? 's' : ''}`;
+
   const prompt = `
-    You are a travel planning AI.
-    Your task is to generate a perfectly planned ${days}-day trip to ${city}.
-
-    INPUT:
-    - City name: ${city}
-    - Duration: ${days} day(s)
-    - Trip preferences: ${preferencesString}
-
-    INSTRUCTIONS:
-    1. Organize the trip into ${days} daily itineraries.
-    2. For EACH day, select 3-5 distinct must-visit locations based on the selected preferences.
-    3. Optimize the order logically for each day to minimize travel distance (cluster nearby locations).
-    4. Provide a short "theme" for each day (e.g., "Downtown Exploration", "Nature & Parks").
-    5. Avoid tourist traps if "Chill / less crowded" is selected.
-    6. Prioritize safety, accessibility, and food options if "Family-friendly" is selected.
-    7. Ensure variety across the days.
-
-    Provide accurate latitude and longitude for mapping. 
-    Ensure the output is valid JSON matching the provided schema.
+    You are an advanced AI travel planner. Your task is to generate a perfectly planned city trip.
+    INPUT: ${city} for ${duration}. Vibe: ${preferencesString}. Travelers: ${companions}.
+    Rules: Optimized route, sequential pin_numbers, and realistic travel times.
   `;
 
   try {
@@ -112,12 +117,19 @@ export const generateItinerary = async (city: string, preferences: Preference[],
     });
 
     const text = response.text;
-    if (!text) {
-        throw new Error("No response from AI");
-    }
+    if (!text) throw new Error("No response from AI");
     
-    // Parse JSON
     const data = JSON.parse(text) as ItineraryDay[];
+    data.forEach(day => {
+      let currentMinutes = 9 * 60;
+      day.activities.forEach((activity, index) => {
+        if (index > 0) currentMinutes += (activity.travelTimeMinutes || 15);
+        activity.startTime = formatTime(currentMinutes);
+        currentMinutes += activity.durationMinutes;
+        activity.endTime = formatTime(currentMinutes);
+      });
+    });
+
     return data;
   } catch (error) {
     console.error("Error generating itinerary:", error);
@@ -125,18 +137,19 @@ export const generateItinerary = async (city: string, preferences: Preference[],
   }
 };
 
-export const generateLocationImage = async (placeName: string, city: string, category: string): Promise<string | null> => {
+export interface RealImageResult {
+  url: string;
+  sourceUrl: string;
+}
+
+export const generateLocationImage = async (placeName: string, city: string): Promise<RealImageResult | null> => {
   return imageQueue.add(async () => {
-      // Always create a new instance to capture the latest API Key if it changed
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      
-      // Use gemini-3-flash-preview (faster, cheaper) to FIND an image URL instead of generating one.
       const model = 'gemini-3-flash-preview'; 
       
-      // Prompt updated to specifically request photos associated with the location name, explicitly mentioning Google Maps Photos context to guide the search tool.
-      const prompt = `Find a direct, high-quality public image URL (jpg, png, webp) for the specific place "${placeName}" in "${city}". 
-      Search for photos that appear in Google Maps listings, travel guides, or official websites for this exact location.
-      Return ONLY the raw URL string. Do not use Markdown. If no good URL is found, return "null".`;
+      const prompt = `Find a REAL direct image URL for "${placeName}" in "${city}". 
+      STRATEGY: Search Wikimedia Commons or Official Tourism sites. 
+      Output ONLY the raw image file URL.`;
 
       try {
         const response = await ai.models.generateContent({
@@ -149,12 +162,20 @@ export const generateLocationImage = async (placeName: string, city: string, cat
         });
 
         const text = response.text?.trim();
-        if (text && text.toLowerCase() !== "null" && text.startsWith("http")) {
-            return text;
+        const urlMatch = text?.match(/https?:\/\/[^\s)"'>\]]+/);
+        
+        // Extract grounding source URL for attribution
+        const sourceUrl = response.candidates?.[0]?.groundingMetadata?.groundingChunks?.[0]?.web?.uri || "https://commons.wikimedia.org";
+
+        if (urlMatch) {
+            return {
+                url: urlMatch[0].replace(/[.,;!]$/, ''),
+                sourceUrl: sourceUrl
+            };
         }
         return null;
       } catch (error: any) {
-        console.warn(`Error fetching image URL for ${placeName}:`, error.message);
+        console.warn(`Error fetching image for ${placeName}:`, error.message);
         return null;
       }
   });
