@@ -177,7 +177,8 @@ const MapItinerary: React.FC<MapItineraryProps> = ({ city, days, onReset }) => {
     const map = mapInstance.current;
     if (!map) return;
 
-    Object.values(markersRef.current).forEach(m => m.remove());
+    // Fix: Explicitly cast to L.Marker[] to avoid "unknown" type error on markers when calling remove()
+    (Object.values(markersRef.current) as L.Marker[]).forEach(m => m.remove());
     markersRef.current = {};
     if (polylineRef.current) polylineRef.current.remove();
     
