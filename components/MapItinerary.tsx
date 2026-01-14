@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ItineraryItem, ItineraryDay, LocationCategory } from '../types';
 import { generateLocationImage, RealImageResult } from '../services/geminiService';
-import { MapPin, Clock, Star, ExternalLink, Coffee, Mountain, Camera, Footprints, Image as ImageIcon, Loader2, Users, ArrowLeft, Download, CheckCircle } from 'lucide-react';
+import { MapPin, Clock, Star, ExternalLink, Coffee, Mountain, Camera, Footprints, Image as ImageIcon, Loader2, Users, ArrowLeft, Download, CheckCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import L from 'leaflet';
 
 interface MapItineraryProps {
@@ -20,7 +20,19 @@ const CategoryIcon = ({ category }: { category: LocationCategory }) => {
   }
 };
 
-const SelectedPinCard = ({ item, city, onClose }: { item: ItineraryItem, city: string, onClose: () => void }) => {
+const SelectedPinCard = ({ 
+  item, 
+  city, 
+  onClose,
+  onNext,
+  onPrev 
+}: { 
+  item: ItineraryItem, 
+  city: string, 
+  onClose: () => void,
+  onNext: () => void,
+  onPrev: () => void
+}) => {
   const [imageResult, setImageResult] = useState<RealImageResult | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -40,7 +52,7 @@ const SelectedPinCard = ({ item, city, onClose }: { item: ItineraryItem, city: s
 
   return (
     <div className="absolute bottom-6 left-6 right-6 md:left-auto md:right-8 md:bottom-auto md:top-24 md:w-[22rem] bg-white rounded-[2.5rem] shadow-[0_30px_60px_-12px_rgba(0,0,0,0.25)] border border-slate-100/50 overflow-hidden z-[2000] animate-in fade-in slide-in-from-right-12 duration-500 ease-out">
-      <div className="relative h-48 bg-slate-100">
+      <div className="relative h-48 bg-slate-100 group">
         <button 
           onClick={onClose}
           className="absolute top-4 right-4 bg-black/20 hover:bg-black/40 backdrop-blur-md text-white rounded-full p-2.5 z-30 transition-all border border-white/20"
@@ -48,6 +60,22 @@ const SelectedPinCard = ({ item, city, onClose }: { item: ItineraryItem, city: s
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         
+        {/* Navigation Buttons */}
+        <button 
+          onClick={(e) => { e.stopPropagation(); onPrev(); }}
+          className="absolute left-3 top-1/2 -translate-y-1/2 bg-black/20 hover:bg-black/50 hover:scale-110 text-white rounded-full p-2 z-30 transition-all backdrop-blur-md border border-white/10"
+          title="Previous Location"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <button 
+          onClick={(e) => { e.stopPropagation(); onNext(); }}
+          className="absolute right-3 top-1/2 -translate-y-1/2 bg-black/20 hover:bg-black/50 hover:scale-110 text-white rounded-full p-2 z-30 transition-all backdrop-blur-md border border-white/10"
+           title="Next Location"
+        >
+          <ChevronRight className="w-5 h-5" />
+        </button>
+
         <div className="absolute top-4 left-4 z-30 pointer-events-none">
           <div className="bg-white/90 backdrop-blur-md text-indigo-600 text-[9px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 shadow-sm border border-white/40">
             <CheckCircle className="w-3 h-3" />
@@ -248,6 +276,26 @@ const MapItinerary: React.FC<MapItineraryProps> = ({ city, days, onReset }) => {
     });
   }, [selectedItem]);
 
+  const handleNext = () => {
+    if (!selectedItem) return;
+    const currentActivities = days[activeDay].activities;
+    const currentIndex = currentActivities.findIndex(item => item.pin_number === selectedItem.pin_number);
+    if (currentIndex === -1) return;
+    
+    const nextIndex = (currentIndex + 1) % currentActivities.length;
+    setSelectedItem(currentActivities[nextIndex]);
+  };
+
+  const handlePrev = () => {
+    if (!selectedItem) return;
+    const currentActivities = days[activeDay].activities;
+    const currentIndex = currentActivities.findIndex(item => item.pin_number === selectedItem.pin_number);
+    if (currentIndex === -1) return;
+
+    const prevIndex = (currentIndex - 1 + currentActivities.length) % currentActivities.length;
+    setSelectedItem(currentActivities[prevIndex]);
+  };
+
   const handleDownloadItinerary = () => {
     let content = `WanderPlan AI: Your Trip to ${city}\n`;
     content += `==========================================\n\n`;
@@ -341,6 +389,8 @@ const MapItinerary: React.FC<MapItineraryProps> = ({ city, days, onReset }) => {
           item={selectedItem} 
           city={city} 
           onClose={() => setSelectedItem(null)} 
+          onNext={handleNext}
+          onPrev={handlePrev}
         />
       )}
 
